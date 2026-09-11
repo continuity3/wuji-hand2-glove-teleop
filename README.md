@@ -105,19 +105,30 @@ PY
 |---|---|---|
 | 指令 | `/hand_left/joint_commands` | `/hand_left2/joint_commands` |
 | 状态 | `/hand_left/joint_states` | `/hand_left2/joint_states` |
+| 触觉 | （一代另有 tactile glove） | `/hand_left2/tactile` + `/tactile/<finger>` |
 | 脚踏 | `/control/footkey` | `/control/footkey2` |
 
 ```bash
 # 先关 Studio；电脑与手同网段
 
-# 终端 A — 二代 ROS 驱动（wuji_sdk → 以太网手）
+# 终端 A — 二代 ROS 驱动（关节 + 指尖触觉）
 cd examples/python/retargeting
 source /opt/ros/humble/setup.bash
 python wujihand2_ros_driver.py --side both --no-footkey
+# 可选：启动时标定指尖（必须空载）
+# python wujihand2_ros_driver.py --side both --no-footkey --tactile-calibrate
 
 # 终端 B — 手套遥操作（发到 *2 topic）
 python 2.teleop_tuned.py --drive ros --hand-model wujihand2 --no-footkey
+
+# 查看触觉
+ros2 topic echo /hand_left2/tactile --once
+ros2 topic echo /hand_left2/tactile/index --once
 ```
+
+`/{hand}/tactile`：`Float32MultiArray`，五指顺序 thumb→pinky，每指 6 个数  
+`[fx, fy, fz, temperature, contacts, max_force]`（力单位 N）。  
+`/{hand}/tactile/<finger>`：该指各点 `[fx,fy,fz]×N`。
 
 需要脚踏时两边都不要加 `--no-footkey`，按住 **F7**；驱动只在 `/control/footkey2 == true` 时接受指令。
 
