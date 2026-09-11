@@ -49,6 +49,21 @@ FOOTKEY_TOPIC = "/control/footkey2"
 STATE_HZ = 50.0
 
 
+def nid_to_flat(nid: int) -> Optional[int]:
+    """Map Hand2 bus nid → flat firmware index 0..19.
+
+    Official layout: nid uses groups of five slots per finger bus; only the
+    first four are joints (see Wuji Hand 2 Quick Start)::
+
+        bus, node_index = divmod(nid - 1, 5)
+        flat = bus * 4 + node_index   # if node_index < 4
+    """
+    bus, node_index = divmod(int(nid) - 1, 5)
+    if 0 <= bus < 5 and 0 <= node_index < 4:
+        return bus * 4 + node_index
+    return None
+
+
 def parse_side_label(value: object) -> Optional[str]:
     text = str(value).strip().lower()
     if "left" in text:
@@ -158,16 +173,17 @@ class Hand2Slot:
             latest = frame
         if latest is None or not latest.joints:
             return
-        # Map by nid into flat 20; missing stay 0
+        # Map bus nid → flat 0..19 (NOT pos[nid] — nids are 1..4,6..9,...,21..24)
         pos = [0.0] * TOTAL_JOINTS
         vel = [0.0] * TOTAL_JOINTS
         eff = [0.0] * TOTAL_JOINTS
         for j in latest.joints:
-            idx = int(j.nid)
-            if 0 <= idx < TOTAL_JOINTS:
-                pos[idx] = float(j.position)
-                vel[idx] = float(j.velocity)
-                eff[idx] = float(j.effort)
+            idx = nid_to_flat(j.nid)
+            if idx is None:
+                continue
+            pos[idx] = float(j.position)
+            vel[idx] = float(j.velocity)
+            eff[idx] = float(j.effort)
         msg = self._JointState()
         msg.header.stamp = stamp
         msg.name = [f"j{i}" for i in range(TOTAL_JOINTS)]
