@@ -25,9 +25,10 @@
     · Footkey（F7）/ go_home
     · EMA 平滑（二代）
     ▼
-执行层（二选一）
-    ├─ --drive sdk  →  JointCommand 直发二代手（推荐）
-    └─ --drive ros  →  ROS topic → wujihandros2 → 一代 USB 手
+执行层（三选一）
+    ├─ --drive sdk              →  JointCommand 直发二代手
+    ├─ --drive ros + wujihand2  →  /hand_*2/joint_commands → wujihand2_ros_driver
+    └─ --drive ros + wujihand   →  /hand_*/joint_commands  → wujihandros2（一代 USB）
 ```
 
 | 层 | 作用 |
@@ -96,9 +97,35 @@ PY
 
 ---
 
-## 快速开始（二代 · 推荐）
+## 快速开始（二代 · ROS 话题 `*2`）
 
-**不要**启动 `wujihandros2`，**先关掉** Wuji Studio（避免抢连接）。
+与一代同样走 ROS，但命名空间加 `2`，可与一代并存：
+
+| | 一代 | 二代 |
+|---|---|---|
+| 指令 | `/hand_left/joint_commands` | `/hand_left2/joint_commands` |
+| 状态 | `/hand_left/joint_states` | `/hand_left2/joint_states` |
+| 脚踏 | `/control/footkey` | `/control/footkey2` |
+
+```bash
+# 先关 Studio；电脑与手同网段
+
+# 终端 A — 二代 ROS 驱动（wuji_sdk → 以太网手）
+cd examples/python/retargeting
+source /opt/ros/humble/setup.bash
+python wujihand2_ros_driver.py --side both --no-footkey
+
+# 终端 B — 手套遥操作（发到 *2 topic）
+python 2.teleop_tuned.py --drive ros --hand-model wujihand2 --no-footkey
+```
+
+需要脚踏时两边都不要加 `--no-footkey`，按住 **F7**；驱动只在 `/control/footkey2 == true` 时接受指令。
+
+---
+
+## 快速开始（二代 · SDK 直驱）
+
+**不要**启动 `wujihandros2` / `wujihand2_ros_driver`，**先关掉** Wuji Studio。
 
 ```bash
 cd examples/python/retargeting
@@ -116,7 +143,7 @@ python 2.teleop_tuned.py --drive sdk --hand-model wujihand2
 正常时终端会出现类似：
 
 ```text
-Drive: sdk (Wuji Hand 2 direct — wujihandros2 NOT used)
+Drive: sdk (Wuji Hand 2 direct — no ROS driver node)
 Hand2 direct: left SN=WH2J… → hand_left
 Hand2 direct: right SN=WH2K… → hand_right
 Teleoperating 2 hand(s) (Ctrl+C to stop)...
@@ -130,7 +157,8 @@ Teleoperating 2 hand(s) (Ctrl+C to stop)...
 
 | 文件 | 用途 |
 |---|---|
-| [`2.teleop_tuned.py`](examples/python/retargeting/2.teleop_tuned.py) | **主入口**：手套 → 重定向 → 二代直驱 / 一代 ROS |
+| [`2.teleop_tuned.py`](examples/python/retargeting/2.teleop_tuned.py) | **主入口**：手套 → 重定向 → 二代直驱 / ROS |
+| [`wujihand2_ros_driver.py`](examples/python/retargeting/wujihand2_ros_driver.py) | **二代 ROS 驱动**：订阅 `hand_*2/joint_commands` → SDK |
 | [`1.teleop_real.py`](examples/python/retargeting/1.teleop_real.py) | 官方风格直驱（少调参），已兼容 Hand2 `handedness()` |
 | [`0.retarget_session.py`](examples/python/retargeting/0.retarget_session.py) | 无硬件，测 `RetargetSession` |
 | [`3.save_home.py`](examples/python/retargeting/3.save_home.py) | 录当前手位姿 → `home_pose.json` |
@@ -149,7 +177,7 @@ python 2.teleop_tuned.py --help
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `--drive {sdk,ros}` | `sdk`（当 hand-model=wujihand2） | `sdk`=二代直驱；`ros`=一代 wujihandros2 |
+| `--drive {sdk,ros}` | `sdk`（当 hand-model=wujihand2） | `sdk`=二代直驱；`ros`=发 ROS（二代→`hand_*2`，一代→`hand_*`） |
 | `--hand-model` | `wujihand2` | 重定向目标手型 |
 | `--side` | `both` | `left` / `right` / `both` |
 | `--no-footkey` | off | 关闭 F7 门控，始终发指令 |
@@ -203,7 +231,7 @@ ros2 launch wujihand_bringup wujihand.launch.py \
 python 2.teleop_tuned.py --drive ros --hand-model wujihand --no-footkey
 ```
 
-> 二代手 **不能** 用 `wujihandros2`（其底层是 `wujihandcpp` USB）。二代请用 `--drive sdk`。
+> 二代若走 ROS，请用本仓库的 `wujihand2_ros_driver.py`（topic `hand_*2`），**不要**用一代 `wujihandros2`。
 
 ---
 

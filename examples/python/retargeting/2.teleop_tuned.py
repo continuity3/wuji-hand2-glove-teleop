@@ -13,40 +13,36 @@ application-layer tuning inspired by dex-retargeting / manus_dex_ws practice:
   5. **Footkey gate** (match Apex Teleop): hold ``F7`` to stream commands;
      release freezes at last cmd. Publishes ``std_msgs/Bool`` on ``/control/footkey``.
   6. **Command sink** (``--drive``):
-       - ``sdk`` (Hand 2): connect Wuji Hand 2 over Ethernet and publish
-         ``JointCommand`` directly — **no wujihandros2 / wujihandcpp**.
-       - ``ros`` (gen-1): publish ``sensor_msgs/JointState`` on
-         ``/hand_left|/hand_right/joint_commands`` for ``wujihandros2`` (USB).
-  7. **Footkey + go_home** still work. With ``--drive sdk``, ROS footkey /
-     ``/tj/control/go_home`` remain optional Apex bridges; the hand itself
-     is driven by ``wuji_sdk``.
+       - ``sdk``: connect Wuji Hand 2 over Ethernet and publish
+         ``JointCommand`` directly.
+       - ``ros`` + ``wujihand2``: publish to ``/hand_left2|/hand_right2/joint_commands``
+         + ``/control/footkey2`` for ``wujihand2_ros_driver.py``.
+       - ``ros`` + ``wujihand``: gen-1 ``wujihandros2`` topics (``hand_left`` /
+         ``hand_right`` + ``/control/footkey``).
+  7. **Footkey + go_home** still work in both modes.
 
 Does **not** replace the SDK retargeter with dex-retargeting — only pre/post
 processing around the official API.
 
 Install:
     pip install wuji-sdk numpy pynput
-    # ROS2 Humble+ needed for --drive ros, or Apex footkey/go_home
+    # ROS2 Humble+ needed for --drive ros / wujihand2_ros_driver
 
 Usage::
 
-    # === Hand 2 (Ethernet) — recommended ===
-    # Close Wuji Studio first. Do NOT launch wujihandros2.
-    python 2.teleop_tuned.py --drive sdk --hand-model wujihand2 --no-footkey
-    python 2.teleop_tuned.py --drive sdk --hand-model wujihand2 --side both
-
-    # === Gen-1 (USB) via wujihandros2 ===
-    # terminal A
+    # === Hand 2 via ROS (topics *2) ===
+    # terminal A — Hand2 ROS driver
     source /opt/ros/humble/setup.bash
-    source /home/marvin/wujihandros2-main/install/setup.bash
-    export ROS_DOMAIN_ID=10
-    ros2 launch wujihand_bringup wujihand.launch.py \\
-        hand_name:=hand_right serial_number:=RIGHT_SN
-    # terminal B
-    python 2.teleop_tuned.py --drive ros --hand-model wujihand --no-footkey
+    python wujihand2_ros_driver.py --side both --no-footkey
+    # terminal B — glove teleop
+    python 2.teleop_tuned.py --drive ros --hand-model wujihand2 --no-footkey
 
-    # reset (when ROS go_home is advertised)
-    ros2 service call /tj/control/go_home std_srvs/srv/Trigger
+    # === Hand 2 direct SDK (no ROS driver) ===
+    python 2.teleop_tuned.py --drive sdk --hand-model wujihand2 --no-footkey
+
+    # === Gen-1 USB via wujihandros2 ===
+    # terminal A: ros2 launch wujihand_bringup wujihand.launch.py ...
+    python 2.teleop_tuned.py --drive ros --hand-model wujihand --no-footkey
 """
 
 from __future__ import annotations
@@ -75,8 +71,11 @@ from home_pose_service import DEFAULT_CONFIG, HomePoseService
 
 FPS = 120
 DEFAULT_HAND_NAME = {"right": "hand_right", "left": "hand_left"}
+DEFAULT_HAND_NAME_2 = {"right": "hand_right2", "left": "hand_left2"}
 DEFAULT_GO_HOME_SERVICE = "/tj/control/go_home"
 DEFAULT_HOME_CONFIG = DEFAULT_CONFIG
+FOOTKEY_TOPIC_GEN1 = "/control/footkey"
+FOOTKEY_TOPIC_HAND2 = "/control/footkey2"
 
 # Hand 2 direct-drive MIT + EMA (gen-1 filtering lived in wujihandros2)
 HAND2_QPOS_EMA = 0.35
@@ -96,15 +95,20 @@ PINKY_FINGER = 4
 class RosJointCommandPublisher:
     """Publish JointState + footkey Bool; optional Trigger go_home service.
 
-    Topics (manus_dex_ws + wujihandros2):
+    Topics:
       /{hand_name}/joint_commands   sensor_msgs/JointState  (position[20])
-      /control/footkey              std_msgs/Bool
+      footkey_topic                 std_msgs/Bool
 
-    Service (HTTP reset gateway):
-      /tj/control/go_home           std_srvs/Trigger  → message \"reset\"
+    Gen-1 (wujihandros2): hand_left / hand_right + /control/footkey
+    Hand2 (wujihand2_ros_driver): hand_left2 / hand_right2 + /control/footkey2
     """
 
-    def __init__(self, hand_names: list[str]) -> None:
+    def __init__(
+        self,
+        hand_names: list[str],
+        *,
+        footkey_topic: str = FOOTKEY_TOPIC_GEN1,
+    ) -> None:
         try:
             import rclpy
             from rclpy.node import Node
@@ -123,6 +127,7 @@ class RosJointCommandPublisher:
         self._rclpy = rclpy
         self._JointState = JointState
         self._Bool = Bool
+        self._footkey_topic = footkey_topic
         self._shutdown_rclpy = False
         self._spin_thread: Optional[threading.Thread] = None
         if not rclpy.ok():
@@ -137,8 +142,7 @@ class RosJointCommandPublisher:
             )
             for name in hand_names
         }
-        # wujihandros2 ignores joint_commands until /control/footkey == true
-        self._footkey_pub = self._node.create_publisher(Bool, "/control/footkey", 10)
+        self._footkey_pub = self._node.create_publisher(Bool, footkey_topic, 10)
         self._last_footkey: Optional[bool] = None
         print(f"ROS_DOMAIN_ID={domain}")
         for name in hand_names:
@@ -146,7 +150,7 @@ class RosJointCommandPublisher:
                 f"ROS command topic: /{name}/joint_commands "
                 "(sensor_msgs/JointState, position[20])"
             )
-        print("ROS footkey topic: /control/footkey (std_msgs/Bool) — required by wujihandros2")
+        print(f"ROS footkey topic: {footkey_topic} (std_msgs/Bool)")
 
     def start_spin(self) -> None:
         """Background spin so ROS services can be served while teleop loops."""
@@ -198,7 +202,7 @@ class RosJointCommandPublisher:
         self._footkey_pub.publish(msg)
         if self._last_footkey is not enabled:
             self._last_footkey = enabled
-            print(f"Published /control/footkey = {enabled}")
+            print(f"Published {self._footkey_topic} = {enabled}")
 
     def send(self, qpos: list[float], hand_name: str) -> None:
         pub = self._pubs.get(hand_name)
@@ -732,10 +736,24 @@ def run_teleop(
         sink: Any = Hand2DirectDriver(
             manager, ordered, hand_names, ros_bridge=True
         )
-        print("Drive: sdk (Wuji Hand 2 direct — wujihandros2 NOT used)")
+        print("Drive: sdk (Wuji Hand 2 direct — no ROS driver node)")
     else:
-        sink = RosJointCommandPublisher([hand_names[s] for s in ordered])
-        print("Drive: ros (wujihandros2 JointState topics)")
+        footkey_topic = (
+            FOOTKEY_TOPIC_HAND2
+            if hand_model == HandModel.WujiHand2
+            else FOOTKEY_TOPIC_GEN1
+        )
+        sink = RosJointCommandPublisher(
+            [hand_names[s] for s in ordered],
+            footkey_topic=footkey_topic,
+        )
+        if hand_model == HandModel.WujiHand2:
+            print(
+                "Drive: ros → wujihand2_ros_driver "
+                f"({', '.join('/'+hand_names[s]+'/joint_commands' for s in ordered)})"
+            )
+        else:
+            print("Drive: ros → wujihandros2 (gen-1 USB)")
 
     def send_all_with_footkey(q: list[float]) -> None:
         sink.set_footkey(True)
@@ -826,8 +844,9 @@ def parse_args() -> argparse.Namespace:
         choices=("sdk", "ros"),
         default=None,
         help=(
-            "Command sink: sdk=direct Hand2 Ethernet (no wujihandros2); "
-            "ros=gen-1 wujihandros2 topics. "
+            "Command sink: sdk=direct Hand2 Ethernet; "
+            "ros=ROS topics (Hand2→hand_*2 + footkey2 via wujihand2_ros_driver; "
+            "gen-1→hand_* + footkey via wujihandros2). "
             "Default: sdk if --hand-model wujihand2 else ros."
         ),
     )
@@ -908,12 +927,6 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     sides = ["left", "right"] if args.side == "both" else [args.side]
-    hand_names = dict(DEFAULT_HAND_NAME)
-    if args.hand_name:
-        if args.side == "both":
-            print("Ignoring --hand-name because --side both uses hand_left and hand_right")
-        else:
-            hand_names[args.side] = args.hand_name
     hand_model = HandModel.WujiHand if args.hand_model == "wujihand" else HandModel.WujiHand2
     drive = args.drive
     if drive is None:
@@ -921,11 +934,17 @@ def main() -> int:
     if drive == "sdk" and args.hand_model != "wujihand2":
         print("Note: --drive sdk is for Hand 2; forcing --hand-model wujihand2")
         hand_model = HandModel.WujiHand2
-    if drive == "ros" and args.hand_model == "wujihand2":
-        print(
-            "Warning: --drive ros + wujihand2 retarget, but wujihandros2 only "
-            "drives gen-1 USB hands. Prefer --drive sdk for Hand 2."
-        )
+
+    # Default ROS namespaces: gen-1 hand_* ; Hand2 hand_*2
+    if hand_model == HandModel.WujiHand2 and drive == "ros":
+        hand_names = dict(DEFAULT_HAND_NAME_2)
+    else:
+        hand_names = dict(DEFAULT_HAND_NAME)
+    if args.hand_name:
+        if args.side == "both":
+            print("Ignoring --hand-name because --side both uses left/right defaults")
+        else:
+            hand_names[args.side] = args.hand_name
 
     finger_scaling = np.array(
         args.finger_scaling if args.finger_scaling is not None else [1.0, 1.0, 1.0, 1.0, 1.1],
