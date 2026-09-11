@@ -156,6 +156,9 @@ class Hand2Slot:
         self._tactile_subs: dict[str, Any] = {}
         self._tactile_finger_pubs: dict[str, Any] = {}
         self._tactile_summary_pub = None
+        self._tactile_frames = 0
+        self._tactile_warn_at = 0.0
+        self._node_logger = node.get_logger()
 
         with contextlib.suppress(Exception):
             hand.clear_fault()
@@ -295,7 +298,17 @@ class Hand2Slot:
     def publish_tactile(self) -> None:
         if not self._tactile_ok:
             return
+        # Firmware may expose fingertip *format* while slaves are offline.
+        mask = None
+        try:
+            # Prefer live joint_diagnostics frame.comm if we just polled states;
+            # fall back to a light GET via last diagnostics is heavy — skip.
+            pass
+        except Exception:
+            pass
+
         summary = [0.0] * (len(FINGERS) * SUMMARY_FIELDS)
+        any_frame = False
         for fi, name in enumerate(FINGERS):
             sub = self._tactile_subs.get(name)
             decode = self._decoders.get(name)
@@ -314,6 +327,8 @@ class Hand2Slot:
                 points, agg = decode(bytes(latest.data))
             except Exception:
                 continue
+            any_frame = True
+            self._tactile_frames += 1
             forces = [_point_force(p) for p in points]
             contacts = float(sum(1 for f in forces if f > CONTACT_N))
             max_f = float(max(forces) if forces else 0.0)
@@ -344,6 +359,17 @@ class Hand2Slot:
             ]
             pt_msg.data = flat
             pub.publish(pt_msg)
+
+        now = time.monotonic()
+        if not any_frame:
+            if now >= self._tactile_warn_at:
+                self._tactile_warn_at = now + 10.0
+                self._node_logger.warn(
+                    f"[{self.hand_name}] no fingertip data frames "
+                    "(check joint_diagnostics.comm.tactile_online_mask; "
+                    "0 means tactile slaves offline). Not publishing zeros."
+                )
+            return
 
         if self._tactile_summary_pub is not None:
             s_msg = self._Float32MultiArray()
