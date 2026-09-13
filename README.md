@@ -60,6 +60,29 @@ pip install "wuji-sdk" numpy pynput
 source /opt/ros/humble/setup.bash
 ```
 
+### Debian 包（推荐部署）
+
+从 [Releases](https://github.com/continuity3/wuji-hand2-glove-teleop/releases) 下载 `wuji-hand2-glove-teleop_*.deb`：
+
+```bash
+sudo dpkg -i wuji-hand2-glove-teleop_2.0.0-1_arm64.deb
+
+# 指向已安装 wuji-sdk 的 Python（conda 环境）
+export WUJI_PYTHON=/home/marvin/miniforge3/envs/wuji/bin/python
+
+# 常用命令
+wujihand2-teleop --drive sdk --hand-model wujihand2 --no-footkey
+wujihand2-ros-driver --side both --no-footkey
+wujihand2-fingertip
+wujihand2-change-ip
+```
+
+本地重新打包：
+
+```bash
+./build_deb.sh 2.0.0   # 输出 dist/wuji-hand2-glove-teleop_2.0.0-1_<arch>.deb
+```
+
 ---
 
 ## 网络：二代手 IP
